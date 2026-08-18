@@ -1,0 +1,75 @@
+name: CodeQL Java scan
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze Java with CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out scan mirror
+        uses: actions/checkout@v6
+
+      - name: Reassemble and verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p scan-input scan-src
+          cat source/owasp-benchmark.zip.part-* > scan-input/owasp-benchmark.zip
+          echo "95866d1cdc6b7a8f367f6acd3c8f16396e41f4adabc0925ab59d3490dcb094af  scan-input/owasp-benchmark.zip" | sha256sum --check --strict
+          unzip -q scan-input/owasp-benchmark.zip -d scan-src
+          test -f scan-src/owasp-benchmark/pom.xml
+
+      - name: Set up JDK 17 and Maven cache
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: scan-src/owasp-benchmark/pom.xml
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build benchmark under CodeQL tracing
+        working-directory: scan-src/owasp-benchmark
+        shell: bash
+        run: >-
+          mvn -B
+          -DskipTests
+          -Dspotless.apply.skip=true
+          -Dspotless.check.skip=true
+          clean package
+
+      - name: Analyze and upload CodeQL results
+        id: codeql-analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
+          output: sarif-results
+          upload: always
+          upload-database: false
+
+      - name: Preserve complete SARIF output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codeql-sarif
+          path: sarif-results/
+          if-no-files-found: warn
+          retention-days: 30
